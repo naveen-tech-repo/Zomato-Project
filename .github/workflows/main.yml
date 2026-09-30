@@ -1,5 +1,5 @@
 name: Enterprise CI Pipeline
- 
+
 # ─────────────────────────────────────────────
 # Trigger
 # ─────────────────────────────────────────────
@@ -40,7 +40,8 @@ concurrency:
 # ─────────────────────────────────────────────
 env:
   NODE_VERSION: "22"
-  IMAGE_NAME:  ${{ secrets.DOCKER_USER }}/zomato_new
+  AWS_REGION: "us-east-1"
+  ECR_REPOSITORY: "zomato_new"
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
@@ -80,7 +81,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-npm-
 
-      # FIX 1: codeql-action v4 does not exist — correct version is v3
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
@@ -116,7 +116,6 @@ jobs:
       - name: Build Application
         run: npm link
 
-      # FIX 2: upload-artifact@v7 does not exist — correct version is v4
       - name: Artifact Upload
         uses: actions/upload-artifact@v4
         with:
@@ -131,26 +130,26 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     timeout-minutes: 30
+
     permissions:
       contents: read
       security-events: write
+      id-token: write
 
     steps:
 
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # FIX 3: download-artifact path: package* is invalid — must be a directory path
       - name: Download React Build
         uses: actions/download-artifact@v4
         with:
           name: artifact-1
           path: .
 
-      # - name: Run Gitleaks
-      #   uses: gitleaks/gitleaks-action@v3
-      #   env:
-      #     NEW_GITHUB_TOKEN: ${{ secrets.GT }}
+      # ───────────────────────────────────────
+      # Trivy Security Scan
+      # ───────────────────────────────────────
 
       - name: Install Trivy
         uses: aquasecurity/setup-trivy@e07451d2e059ed86c2870430ea286b3a9e0bf241
@@ -168,25 +167,59 @@ jobs:
             --ignore-unfixed \
             .
 
-      # FIX 4: "run:" was indented 5 spaces (1 short) — YAML parser rejected it at L159
       - name: Verify SARIF
         run: |
           pwd
           ls -la
           find . -name "*.sarif"
 
-      # FIX 5: upload-sarif@v4 does not exist — correct version is v3
       - name: Upload Trivy Scan Results
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ./trivy-fs.sarif
 
+      # ───────────────────────────────────────
+      # Dockerfile Validation
+      # ───────────────────────────────────────
+
       - name: Lint Dockerfile
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
           failure-threshold: warning
+
+      # ───────────────────────────────────────
+      # AWS OIDC Authentication
+      # ───────────────────────────────────────
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS Identity
+        run: |
+          aws sts get-caller-identity
+
+      # ───────────────────────────────────────
+      # Login to Amazon ECR
+      # ───────────────────────────────────────
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # This creates:
+      # 123456789012.dkr.ecr.us-east-1.amazonaws.com/zomato_new
+      - name: Set ECR Image Name
+        run: |
+          echo "IMAGE_NAME=${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}" >> "$GITHUB_ENV"
+
+      # ───────────────────────────────────────
+      # Docker Build
+      # ───────────────────────────────────────
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -205,13 +238,17 @@ jobs:
           context: .
           file: Dockerfile
           push: false
+
           tags: |
             ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ env.IMAGE_NAME }}:latest
+
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
+
           provenance: false
           load: true
+
           labels: |
             org.opencontainers.image.title=Zomato
             org.opencontainers.image.source=${{ github.repository }}
@@ -224,23 +261,28 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
+      # ───────────────────────────────────────
+      # Verify Docker Image
+      # ───────────────────────────────────────
+
       - name: Verify Docker Image
         run: |
           docker images
           docker image inspect \
             ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
 
-      # FIX 6: docker/login-action@v4 does not exist — correct version is v3
-      - name: Login to DockerHub
-        uses: docker/login-action@v3
-        with:
-           username: ${{ secrets.DOCKER_USER }}
-           password: ${{ secrets.DOCKER_PASSWORD }}
+      # ───────────────────────────────────────
+      # Push Image to Amazon ECR
+      # ───────────────────────────────────────
 
-      - name: Push Docker Image
+      - name: Push Docker Image to ECR
         run: |
-            docker push ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          docker push ${{ env.IMAGE_NAME }}:latest
+
+      # ───────────────────────────────────────
+      # Smoke Test
+      # ───────────────────────────────────────
 
       - name: Smoke Test Container
         run: |
@@ -248,9 +290,15 @@ jobs:
             --name zomato-test \
             -p 3000:3000 \
             ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+
           sleep 20
+
           docker ps
           docker logs zomato-test
+
+      # ───────────────────────────────────────
+      # Cleanup
+      # ───────────────────────────────────────
 
       - name: Cleanup
         if: always()
