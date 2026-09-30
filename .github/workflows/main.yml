@@ -192,7 +192,14 @@ jobs:
       # ───────────────────────────────────────
       # AWS OIDC Authentication
       # ───────────────────────────────────────
-
+      - name: Show GitHub OIDC Context
+        run: |
+               echo "Repository: ${{ github.repository }}"
+               echo "Repository ID: ${{ github.repository_id }}"
+               echo "Organization: ${{ github.repository_owner }}"
+               echo "Ref: ${{ github.ref }}"
+               echo "Event: ${{ github.event_name }}"
+               echo "Actor: ${{ github.actor }}"
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
