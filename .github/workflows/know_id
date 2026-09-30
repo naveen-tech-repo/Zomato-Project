@@ -1,0 +1,29 @@
+name: GitHub OIDC Identity
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Display GitHub Identity
+        run: |
+          echo "======================================"
+          echo "GitHub OIDC Identity Information"
+          echo "======================================"
+
+          echo "Repository      : ${{ github.repository }}"
+          echo "Repository ID   : ${{ github.repository_id }}"
+          echo "Owner           : ${{ github.repository_owner }}"
+          echo "Owner ID        : ${{ github.repository_owner_id }}"
+          echo "Branch/Ref      : ${{ github.ref }}"
+          echo "Event           : ${{ github.event_name }}"
+          echo "Commit SHA      : ${{ github.sha }}"
+
+          echo "======================================"
