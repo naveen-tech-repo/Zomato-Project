@@ -205,7 +205,7 @@ jobs:
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::669375920816:role/github_zomato_role
+          role-to-assume: //your your arn here
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Verify AWS Identity
